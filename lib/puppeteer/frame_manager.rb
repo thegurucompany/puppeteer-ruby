@@ -65,8 +65,17 @@ class Puppeteer::FrameManager
     )
     frame_tree = results.last['frameTree']
     handle_frame_tree(frame_tree)
+    downloads_folder = ENV.fetch 'PUPPETEER_DOWNLOADS_FOLDER', '/tmp'
     await_all(
-      @client.async_send_message('Page.setLifecycleEventsEnabled', enabled: true),
+      @client.async_send_message(
+        'Page.setLifecycleEventsEnabled',
+        enabled: true
+      ),
+      @client.async_send_message(
+        'Page.setDownloadBehavior',
+        behavior: 'allow',
+        downloadPath: downloads_folder
+      ),
       @client.async_send_message('Runtime.enable'),
     )
     ensure_isolated_world(UTILITY_WORLD_NAME)
