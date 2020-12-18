@@ -46,7 +46,7 @@ class Puppeteer::Page
     @screenshot_task_queue = screenshot_task_queue
 
     @workers = {}
-    @client.on_event 'Target.attachedToTarget' do |event|
+    @client.on_event('Target.attachedToTarget') do |event|
       if event['targetInfo']['type'] != 'worker'
         # If we don't detach from service workers, they will never die.
         await @client.send_message('Target.detachFromTarget', sessionId: event['sessionId'])
@@ -56,65 +56,69 @@ class Puppeteer::Page
       session = Puppeteer::Connection.from_session(@client).session(event['sessionId']) # rubocop:disable Lint/UselessAssignment
       #   const worker = new Worker(session, event.targetInfo.url, this._addConsoleMessage.bind(this), this._handleException.bind(this));
       #   this._workers.set(event.sessionId, worker);
-      #   this.emit(Events.Page.WorkerCreated, worker);
+      #   this.emit(PageEmittedEvents::WorkerCreated, worker);
     end
-    @client.on_event 'Target.detachedFromTarget' do |event|
+    @client.on_event('Target.detachedFromTarget') do |event|
       session_id = event['sessionId']
       worker = @workers[session_id]
       next unless worker
 
-      emit_event('Events.Page.WorkerDestroyed', worker)
+      emit_event(PageEmittedEvents::WorkerDestroyed, worker)
       @workers.delete(session_id)
     end
 
-    @frame_manager.on_event 'Events.FrameManager.FrameAttached' do |event|
-      emit_event 'Events.Page.FrameAttached', event
+    @frame_manager.on_event(FrameManagerEmittedEvents::FrameAttached) do |event|
+      emit_event(PageEmittedEvents::FrameAttached, event)
     end
-    @frame_manager.on_event 'Events.FrameManager.FrameDetached' do |event|
-      emit_event 'Events.Page.FrameDetached', event
+    @frame_manager.on_event(FrameManagerEmittedEvents::FrameDetached) do |event|
+      emit_event(PageEmittedEvents::FrameDetached, event)
     end
-    @frame_manager.on_event 'Events.FrameManager.FrameNavigated' do |event|
-      emit_event 'Events.Page.FrameNavigated', event
+    @frame_manager.on_event(FrameManagerEmittedEvents::FrameNavigated) do |event|
+      emit_event(PageEmittedEvents::FrameNavigated, event)
     end
 
     network_manager = @frame_manager.network_manager
-    network_manager.on_event 'Events.NetworkManager.Request' do |event|
-      emit_event 'Events.Page.Request', event
+    network_manager.on_event(NetworkManagerEmittedEvents::Request) do |event|
+      emit_event(PageEmittedEvents::Request, event)
     end
-    network_manager.on_event 'Events.NetworkManager.Response' do |event|
-      emit_event 'Events.Page.Response', event
+    network_manager.on_event(NetworkManagerEmittedEvents::Response) do |event|
+      emit_event(PageEmittedEvents::Response, event)
     end
-    network_manager.on_event 'Events.NetworkManager.RequestFailed' do |event|
-      emit_event 'Events.Page.RequestFailed', event
+    network_manager.on_event(NetworkManagerEmittedEvents::RequestFailed) do |event|
+      emit_event(PageEmittedEvents::RequestFailed, event)
     end
-    network_manager.on_event 'Events.NetworkManager.RequestFinished' do |event|
-      emit_event 'Events.Page.RequestFinished', event
+    network_manager.on_event(NetworkManagerEmittedEvents::RequestFinished) do |event|
+      emit_event(PageEmittedEvents::RequestFinished, event)
     end
     @file_chooser_interception_is_disabled = false
     @file_chooser_interceptors = Set.new
 
-    @client.on_event 'Page.domContentEventFired' do |event|
-      emit_event 'Events.Page.DOMContentLoaded'
+    @client.on_event('Page.domContentEventFired') do |event|
+      emit_event(PageEmittedEvents::DOMContentLoaded)
     end
-    @client.on_event 'Page.loadEventFired' do |event|
-      emit_event 'Events.Page.Load'
+    @client.on_event('Page.loadEventFired') do |event|
+      emit_event(PageEmittedEvents::Load)
     end
     # client.on('Runtime.consoleAPICalled', event => this._onConsoleAPI(event));
     # client.on('Runtime.bindingCalled', event => this._onBindingCalled(event));
-    @client.on_event 'Page.javascriptDialogOpening' do |event|
+    @client.on_event('Page.javascriptDialogOpening') do |event|
       handle_dialog_opening(event)
     end
-    # client.on('Runtime.exceptionThrown', exception => this._handleException(exception.exceptionDetails));
-    # client.on('Inspector.targetCrashed', event => this._onTargetCrashed());
+    @client.on_event('Runtime.exceptionThrown') do |exception|
+      handle_exception(exception['exceptionDetails'])
+    end
+    @client.on_event('Inspector.targetCrashed') do |event|
+      handle_target_crashed
+    end
     # client.on('Performance.metrics', event => this._emitMetrics(event));
-    @client.on_event 'Log.entryAdded' do |event|
+    @client.on_event('Log.entryAdded') do |event|
       handle_log_entry_added(event)
     end
-    @client.on_event 'Page.fileChooserOpened' do |event|
+    @client.on_event('Page.fileChooserOpened') do |event|
       handle_file_chooser(event)
     end
     @target.is_closed_promise.then do
-      emit_event 'Events.Page.Close'
+      emit_event(PageEmittedEvents::Close)
       @closed = true
     end
   end
@@ -128,43 +132,22 @@ class Puppeteer::Page
     )
   end
 
-  EVENT_MAPPINGS = {
-    close: 'Events.Page.Close',
-    # console: 'Events.Page.Console',
-    dialog: 'Events.Page.Dialog',
-    domcontentloaded: 'Events.Page.DOMContentLoaded',
-    # error:
-    frameattached: 'Events.Page.FrameAttached',
-    framedetached: 'Events.Page.FrameDetached',
-    framenavigated: 'Events.Page.FrameNavigated',
-    load: 'Events.Page.Load',
-    # metrics: 'Events.Page.Metrics',
-    # pageerror: 'Events.Page.PageError',
-    popup: 'Events.Page.Popup',
-    request: 'Events.Page.Request',
-    requestfailed: 'Events.Page.RequestFailed',
-    requestfinished: 'Events.Page.RequestFinished',
-    response: 'Events.Page.Response',
-    # workercreated: 'Events.Page.WorkerCreated',
-    # workerdestroyed: 'Events.Page.WorkerDestroyed',
-  }
-
   # @param event_name [Symbol]
   def on(event_name, &block)
-    unless EVENT_MAPPINGS.has_key?(event_name.to_sym)
-      raise ArgumentError.new("Unknown event name: #{event_name}. Known events are #{EVENT_MAPPINGS.keys.join(", ")}")
+    unless PageEmittedEvents.values.include?(event_name.to_s)
+      raise ArgumentError.new("Unknown event name: #{event_name}. Known events are #{PageEmittedEvents.values.to_a.join(", ")}")
     end
 
-    add_event_listener(EVENT_MAPPINGS[event_name.to_sym], &block)
+    super(event_name.to_s, &block)
   end
 
   # @param event_name [Symbol]
   def once(event_name, &block)
-    unless EVENT_MAPPINGS.has_key?(event_name.to_sym)
-      raise ArgumentError.new("Unknown event name: #{event_name}. Known events are #{EVENT_MAPPINGS.keys.join(", ")}")
+    unless PageEmittedEvents.values.include?(event_name.to_s)
+      raise ArgumentError.new("Unknown event name: #{event_name}. Known events are #{PageEmittedEvents.values.to_a.join(", ")}")
     end
 
-    observe_first(EVENT_MAPPINGS[event_name.to_sym], &block)
+    super(event_name.to_s, &block)
   end
 
   def handle_file_chooser(event)
@@ -211,19 +194,10 @@ class Puppeteer::Page
 
   define_async_method :async_wait_for_file_chooser
 
-  # /**
-  #  * @param {!{longitude: number, latitude: number, accuracy: (number|undefined)}} options
-  #  */
-  # async setGeolocation(options) {
-  #   const { longitude, latitude, accuracy = 0} = options;
-  #   if (longitude < -180 || longitude > 180)
-  #     throw new Error(`Invalid longitude "${longitude}": precondition -180 <= LONGITUDE <= 180 failed.`);
-  #   if (latitude < -90 || latitude > 90)
-  #     throw new Error(`Invalid latitude "${latitude}": precondition -90 <= LATITUDE <= 90 failed.`);
-  #   if (accuracy < 0)
-  #     throw new Error(`Invalid accuracy "${accuracy}": precondition 0 <= ACCURACY failed.`);
-  #   await this._client.send('Emulation.setGeolocationOverride', {longitude, latitude, accuracy});
-  # }
+  # @param [Puppeteer::Geolocation]
+  def geolocation=(geolocation)
+    @client.send_message('Emulation.setGeolocationOverride', geolocation.to_h)
+  end
 
   attr_reader :javascript_enabled, :target
 
@@ -238,7 +212,7 @@ class Puppeteer::Page
   class TargetCrashedError < StandardError; end
 
   private def handle_target_crashed
-    emit_event 'error', TargetCrashedError.new('Page crashed!')
+    emit_event(PageEmittedEvents::Error, TargetCrashedError.new('Page crashed!'))
   end
 
   private def handle_log_entry_added(event)
@@ -259,7 +233,7 @@ class Puppeteer::Page
         url: url,
         line_number: line_number,
       )
-      emit_event('Events.Page.Console',
+      emit_event(PageEmittedEvents::Console,
         Puppeteer::ConsoleMessage.new(level, text, [], console_message_location))
     end
   end
@@ -367,47 +341,34 @@ class Puppeteer::Page
 
   define_async_method :async_Sx
 
-  # /**
-  #  * @param {!Array<string>} urls
-  #  * @return {!Promise<!Array<Network.Cookie>>}
-  #  */
-  # async cookies(...urls) {
-  #   return (await this._client.send('Network.getCookies', {
-  #     urls: urls.length ? urls : [this.url()]
-  #   })).cookies;
-  # }
+  # @return [Array<Hash>]
+  def cookies(*urls)
+    @client.send_message('Network.getCookies', urls: (urls.empty? ? [url] : urls))['cookies']
+  end
 
-  # /**
-  #  * @param {Array<Protocol.Network.deleteCookiesParameters>} cookies
-  #  */
-  # async deleteCookie(...cookies) {
-  #   const pageURL = this.url();
-  #   for (const cookie of cookies) {
-  #     const item = Object.assign({}, cookie);
-  #     if (!cookie.url && pageURL.startsWith('http'))
-  #       item.url = pageURL;
-  #     await this._client.send('Network.deleteCookies', item);
-  #   }
-  # }
+  def delete_cookie(*cookies)
+    page_url = url
+    starts_with_http = page_url.start_with?("http")
+    cookies.each do |cookie|
+      item = (starts_with_http ? { url: page_url } : {}).merge(cookie)
+      @client.send_message("Network.deleteCookies", item)
+    end
+  end
 
-  # /**
-  #  * @param {Array<Network.CookieParam>} cookies
-  #  */
-  # async setCookie(...cookies) {
-  #   const pageURL = this.url();
-  #   const startsWithHTTP = pageURL.startsWith('http');
-  #   const items = cookies.map(cookie => {
-  #     const item = Object.assign({}, cookie);
-  #     if (!item.url && startsWithHTTP)
-  #       item.url = pageURL;
-  #     assert(item.url !== 'about:blank', `Blank page can not have cookie "${item.name}"`);
-  #     assert(!String.prototype.startsWith.call(item.url || '', 'data:'), `Data URL page can not have cookie "${item.name}"`);
-  #     return item;
-  #   });
-  #   await this.deleteCookie(...items);
-  #   if (items.length)
-  #     await this._client.send('Network.setCookies', { cookies: items });
-  # }
+  def set_cookie(*cookies)
+    page_url = url
+    starts_with_http = page_url.start_with?("http")
+    items = cookies.map do |cookie|
+      (starts_with_http ? { url: page_url } : {}).merge(cookie).tap do |item|
+        raise ArgumentError.new("Blank page can not have cookie \"#{item[:name]}\"") if item[:url] == "about:blank"
+        raise ArgumetnError.new("Data URL page can not have cookie \"#{item[:name]}\"") if item[:url]&.start_with?("data:")
+      end
+    end
+    delete_cookie(*items)
+    unless items.empty?
+      @client.send_message("Network.setCookies", cookies: items)
+    end
+  end
 
   class ScriptTag
     # @param {!{content?: string, path?: string, type?: string, url?: string}} options
@@ -502,7 +463,7 @@ class Puppeteer::Page
   #  * @param {!Protocol.Performance.metricsPayload} event
   #  */
   # _emitMetrics(event) {
-  #   this.emit(Events.Page.Metrics, {
+  #   this.emit(PageEmittedEvents::Metrics, {
   #     title: event.title,
   #     metrics: this._buildMetricsObject(event.metrics)
   #   });
@@ -521,15 +482,14 @@ class Puppeteer::Page
   #   return result;
   # }
 
-  # /**
-  #  * @param {!Protocol.Runtime.ExceptionDetails} exceptionDetails
-  #  */
-  # _handleException(exceptionDetails) {
-  #   const message = helper.getExceptionMessage(exceptionDetails);
-  #   const err = new Error(message);
-  #   err.stack = ''; // Don't report clientside error with a node stack attached
-  #   this.emit(Events.Page.PageError, err);
-  # }
+  class PageError < StandardError ; end
+
+  private def handle_exception(exception_details)
+    message = Puppeteer::ExceptionDetails.new(exception_details).message
+    err = PageError.new(message)
+    #   err.stack = ''; // Don't report clientside error with a node stack attached
+    emit_event(PageEmittedEvents::PageError, err)
+  end
 
   # /**
   #  * @param {!Protocol.Runtime.consoleAPICalledPayload} event
@@ -613,7 +573,7 @@ class Puppeteer::Page
   #  * @param {Protocol.Runtime.StackTrace=} stackTrace
   #  */
   # _addConsoleMessage(type, args, stackTrace) {
-  #   if (!this.listenerCount(Events.Page.Console)) {
+  #   if (!this.listenerCount(PageEmittedEvents::Console)) {
   #     args.forEach(arg => arg.dispose());
   #     return;
   #   }
@@ -631,7 +591,7 @@ class Puppeteer::Page
   #     columnNumber: stackTrace.callFrames[0].columnNumber,
   #   } : {};
   #   const message = new ConsoleMessage(type, textTokens.join(' '), args, location);
-  #   this.emit(Events.Page.Console, message);
+  #   this.emit(PageEmittedEvents::Console, message);
   # }
 
   private def handle_dialog_opening(event)
@@ -643,7 +603,7 @@ class Puppeteer::Page
               type: dialog_type,
               message: event['message'],
               default_value: event['defaultPrompt'])
-    emit_event('Events.Page.Dialog', dialog)
+    emit_event(PageEmittedEvents::Dialog, dialog)
   end
 
   # @return [String]
@@ -726,7 +686,7 @@ class Puppeteer::Page
 
   private def session_close_promise
     @disconnect_promise ||= resolvable_future do |future|
-      @client.observe_first('Events.CDPSession.Disconnected') do
+      @client.observe_first(CDPSessionEmittedEvents::Disconnected) do
         future.reject(Puppeteer::CDPSession::Error.new('Target Closed'))
       end
     end
@@ -746,7 +706,7 @@ class Puppeteer::Page
         -> (request) { predicate.call(request) }
       end
 
-    wait_for_network_manager_event('Events.NetworkManager.Request',
+    wait_for_network_manager_event(NetworkManagerEmittedEvents::Request,
       predicate: request_predicate,
       timeout: timeout,
     )
@@ -780,7 +740,7 @@ class Puppeteer::Page
         -> (response) { predicate.call(response) }
       end
 
-    wait_for_network_manager_event('Events.NetworkManager.Response',
+    wait_for_network_manager_event(NetworkManagerEmittedEvents::Response,
       predicate: response_predicate,
       timeout: timeout,
     )
@@ -939,16 +899,16 @@ class Puppeteer::Page
       clip = { x: 0, y: 0, width: width, height: height, scale: 1 }
 
       screen_orientation =
-        if @viewport.landscape?
+        if @viewport&.landscape?
           { angle: 90, type: 'landscapePrimary' }
         else
           { angle: 0, type: 'portraitPrimary' }
         end
       @client.send_message('Emulation.setDeviceMetricsOverride',
-        mobile: @viewport.mobile?,
+        mobile: @viewport&.mobile? || false,
         width: width,
         height: height,
-        deviceScaleFactor: @viewport.device_scale_factor,
+        deviceScaleFactor: @viewport&.device_scale_factor || 1,
         screenOrientation: screen_orientation)
     end
 
@@ -1043,6 +1003,12 @@ class Puppeteer::Page
     else
       @client.connection.send_message('Target.closeTarget', targetId: @target.target_id)
       await @target.is_closed_promise
+
+      # @closed sometimes remains false, so wait for @closed = true with 100ms timeout.
+      25.times do
+        break if @closed
+        sleep 0.004
+      end
     end
   end
 

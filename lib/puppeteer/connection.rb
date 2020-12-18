@@ -39,7 +39,7 @@ class Puppeteer::Connection
   def initialize(url, transport, delay = 0)
     @url = url
     @last_id = 0
-    @callbacks = {}
+    @callbacks = Concurrent::Hash.new
     @delay = delay
 
     @transport = transport
@@ -52,7 +52,7 @@ class Puppeteer::Connection
       handle_close
     end
 
-    @sessions = {}
+    @sessions = Concurrent::Hash.new
     @closed = false
   end
 
@@ -92,22 +92,41 @@ class Puppeteer::Connection
   end
 
   def async_send_message(method, params = {})
-    id = raw_send(message: { method: method, params: params })
     promise = resolvable_future
-    @callbacks[id] = MessageCallback.new(method: method, promise: promise)
+
+    generate_id do |id|
+      @callbacks[id] = MessageCallback.new(method: method, promise: promise)
+      raw_send(id: id, message: { method: method, params: params })
+    end
+
     promise
   end
 
-  private def generate_id
-    @last_id += 1
+  # package private. not intended to use externally.
+  #
+  # ```usage
+  # connection.generate_id do |generated_id|
+  #   # play with generated_id
+  # end
+  # ````
+  #
+  def generate_id(&block)
+    block.call(@last_id += 1)
   end
 
-  def raw_send(message:)
-    id = generate_id
+  # package private. not intended to use externally.
+  def raw_send(id:, message:)
+    # In original puppeteer (JS) implementation,
+    # id is generated here using #generate_id and the id argument is not passed to #raw_send.
+    #
+    # However with concurrent-ruby, '#handle_message' is sometimes called
+    # just soon after @transport.send_text and **before returning the id.**
+    #
+    # So we have to know the message id in advance before send_text.
+    #
     payload = JSON.fast_generate(message.compact.merge(id: id))
     @transport.send_text(payload)
     request_debug_printer.handle_payload(payload)
-    id
   end
 
   # Just for effective debugging :)
@@ -211,7 +230,7 @@ class Puppeteer::Connection
         end
       end
     else
-      emit_event message['method'], message['params']
+      emit_event(message['method'], message['params'])
     end
   end
 
@@ -233,7 +252,7 @@ class Puppeteer::Connection
       session.handle_closed
     end
     @sessions.clear
-    emit_event 'Events.Connection.Disconnected'
+    emit_event(ConnectionEmittedEvents::Disconnected)
   end
 
   def on_close(&block)

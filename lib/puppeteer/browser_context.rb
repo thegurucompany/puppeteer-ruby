@@ -11,29 +11,22 @@ class Puppeteer::BrowserContext
     @id = context_id
   end
 
-  EVENT_MAPPINGS = {
-    disconnected: 'Events.BrowserContext.Disconnected',
-    targetcreated: 'Events.BrowserContext.TargetCreated',
-    targetchanged: 'Events.BrowserContext.TargetChanged',
-    targetdestroyed: 'Events.BrowserContext.TargetDestroyed',
-  }
-
   # @param event_name [Symbol] either of :disconnected, :targetcreated, :targetchanged, :targetdestroyed
   def on(event_name, &block)
-    unless EVENT_MAPPINGS.has_key?(event_name.to_sym)
-      raise ArgumentError.new("Unknown event name: #{event_name}. Known events are #{EVENT_MAPPINGS.keys.join(", ")}")
+    unless BrowserContextEmittedEvents.values.include?(event_name.to_s)
+      raise ArgumentError.new("Unknown event name: #{event_name}. Known events are #{BrowserContextEmittedEvents.values.to_a.join(", ")}")
     end
 
-    add_event_listener(EVENT_MAPPINGS[event_name.to_sym], &block)
+    super(event_name.to_s, &block)
   end
 
   # @param event_name [Symbol]
   def once(event_name, &block)
-    unless EVENT_MAPPINGS.has_key?(event_name.to_sym)
-      raise ArgumentError.new("Unknown event name: #{event_name}. Known events are #{EVENT_MAPPINGS.keys.join(", ")}")
+    unless BrowserContextEmittedEvents.values.include?(event_name.to_s)
+      raise ArgumentError.new("Unknown event name: #{event_name}. Known events are #{BrowserContextEmittedEvents.values.to_a.join(", ")}")
     end
 
-    observe_first(EVENT_MAPPINGS[event_name.to_sym], &block)
+    super(event_name.to_s, &block)
   end
 
   # @return {!Array<!Target>} target
@@ -64,42 +57,48 @@ class Puppeteer::BrowserContext
     !!@id
   end
 
-  # /**
-  #  * @param {string} origin
-  #  * @param {!Array<string>} permissions
-  #  */
-  # async overridePermissions(origin, permissions) {
-  #   const webPermissionToProtocol = new Map([
-  #     ['geolocation', 'geolocation'],
-  #     ['midi', 'midi'],
-  #     ['notifications', 'notifications'],
-  #     ['push', 'push'],
-  #     ['camera', 'videoCapture'],
-  #     ['microphone', 'audioCapture'],
-  #     ['background-sync', 'backgroundSync'],
-  #     ['ambient-light-sensor', 'sensors'],
-  #     ['accelerometer', 'sensors'],
-  #     ['gyroscope', 'sensors'],
-  #     ['magnetometer', 'sensors'],
-  #     ['accessibility-events', 'accessibilityEvents'],
-  #     ['clipboard-read', 'clipboardRead'],
-  #     ['clipboard-write', 'clipboardWrite'],
-  #     ['payment-handler', 'paymentHandler'],
-  #     // chrome-specific permissions we have.
-  #     ['midi-sysex', 'midiSysex'],
-  #   ]);
-  #   permissions = permissions.map(permission => {
-  #     const protocolPermission = webPermissionToProtocol.get(permission);
-  #     if (!protocolPermission)
-  #       throw new Error('Unknown permission: ' + permission);
-  #     return protocolPermission;
-  #   });
-  #   await this._connection.send('Browser.grantPermissions', {origin, browserContextId: this._id || undefined, permissions});
-  # }
+  WEB_PERMISSION_TO_PROTOCOL = {
+    'geolocation' => 'geolocation',
+    'midi' => 'midi',
+    'notifications' => 'notifications',
+    # TODO: push isn't a valid type?
+    # 'push' => 'push',
+    'camera' => 'videoCapture',
+    'microphone' => 'audioCapture',
+    'background-sync' => 'backgroundSync',
+    'ambient-light-sensor' => 'sensors',
+    'accelerometer' => 'sensors',
+    'gyroscope' => 'sensors',
+    'magnetometer' => 'sensors',
+    'accessibility-events' => 'accessibilityEvents',
+    'clipboard-read' => 'clipboardReadWrite',
+    'clipboard-write' => 'clipboardReadWrite',
+    'payment-handler' => 'paymentHandler',
+    'idle-detection' => 'idleDetection',
+    # chrome-specific permissions we have.
+    'midi-sysex' => 'midiSysex',
+  }.freeze
 
-  # async clearPermissionOverrides() {
-  #   await this._connection.send('Browser.resetPermissions', {browserContextId: this._id || undefined});
-  # }
+  # @param origin [String]
+  # @param permissions [Array<String>]
+  def override_permissions(origin, permissions)
+    protocol_permissions = permissions.map do |permission|
+      WEB_PERMISSION_TO_PROTOCOL[permission] or raise ArgumentError.new("Unknown permission: #{permission}")
+    end
+    @connection.send_message('Browser.grantPermissions', {
+      origin: origin,
+      browserContextId: @id,
+      permissions: protocol_permissions,
+    }.compact)
+  end
+
+  def clear_permission_overrides
+    if @id
+      @connection.send_message('Browser.resetPermissions', browserContextId: @id)
+    else
+      @connection.send_message('Browser.resetPermissions')
+    end
+  end
 
   # @return [Future<Puppeteer::Page>]
   def new_page
